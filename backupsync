@@ -8,39 +8,74 @@ current_dir="$(
 
 now=$(date +"%Y-%m-%d_%H:%M:%S")
 path=""
-dry=""
+dry="0"
+
 aws_access=${AWS_ACCESS_KEY_ID}
 aws_secret=${AWS_SECRET_ACCESS_KEY}
 
-while [[ $# > 0 ]]; do
-  if [[ $1 == "--dry" ]]; then
-    dry="1"
-  else
-    path="$(realpath "$1")"
-    echo "Resolved path: $path"
-  fi
-  shift
-done
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry)
+      dry="1"
+      shift
+      ;;
+    *)
+      if [[ -z "$path" ]]; then
+        # Use readlink -f for portability if realpath is not available
+        # realpath might be in a different location on some systems
+        if command -v realpath &> /dev/null; then
+          path="$(realpath "$1")"
+        else
+          path="$(readlink -f "$1")" || { echo "Error: Could not resolve path for \"$1\""; exit 1; }
+        fi
+        echo "Resolved path: $path"
+      else
+        echo "Warning: Ignoring extra argument '$1'. Only one path is expected."
+        fi
+        shift
+        ;;
+    esac
+  done
 
-log () {
-  if [[ $dry = "1" ]]; then
-    echo "[DRY_RUN]: $@"
-  else
-    echo "$@"
-  fi
-}
+  log () {
+    if [[ "$dry" = "1" ]]; then
+      echo "[DRY_RUN]: $@"
+    else
+      echo "$@"
+    fi
+  }
 
-execute () {
-  log "execute : $@"
+  execute () {
+    log "executing: $@"
 
-  if [[ $dry = "1" ]]; then
-    return
-  fi
+    if [[ "$dry" = "1" ]]; then
+      return 0
+    fi
 
-  "$@"
-}
+    eval "$@"
+    return $?
+  }
 
-log "$aws_access"
-log "$aws_secret"
+# Logic
 
-execute "tar -czvf /tmp/$now.tar.gz \"$path\""
+if [[ -z "$path" ]] && [[ "$dry" = "0" ]]; then
+  echo "Error: No file or directory path provided."
+  echo "Usage: $(basename "$0") [--dry] <path_to_file_or_directory>"
+  exit 1
+fi
+
+# Avoid logging full keys
+log "AWS Access Key ID (partial): ${aws_access:0:4}..."
+log "AWS Secret Access Key (partial): ${aws_secret:0:4}..."
+
+tar_command="tar -czvf /tmp/$now.tar.gz \"$path\""
+
+execute "$tar_command"
+
+if [[ $? -ne 0 ]]; then
+  echo "Error: The tar command failed."
+  exit 1
+fi
+
+echo "Backup created successfully at /tmp/$now.tar.gz"
